@@ -20,6 +20,8 @@ import {
 } from './bookmarks-db.js';
 import { formatClassificationSummary } from './bookmark-classify.js';
 import { classifyWithLlm, classifyDomainsWithLlm } from './bookmark-classify-llm.js';
+import { resolveEngine, detectAvailableEngines } from './engine.js';
+import { loadPreferences, savePreferences } from './preferences.js';
 import { renderViz } from './bookmarks-viz.js';
 import { dataDir, ensureDataDir, isFirstRun, twitterBookmarksIndexPath } from './paths.js';
 import fs from 'node:fs';
@@ -159,14 +161,16 @@ function showWhatsNew(): void {
 function logo(): string {
   const v = getLocalVersion();
   const vLabel = `v${v}`;
-  // Right-align version inside the box (29 chars inner width)
-  const line2Content = `  \x1b[2mfieldtheory.dev/cli\x1b[0m`;
-  const vPad = 29 - 'fieldtheory.dev/cli'.length - vLabel.length - 2;
+  const innerW = 33;
+  const line1 = 'F i e l d   T h e o r y';
+  const line2 = 'fieldtheory.dev/cli';
+  const pad1 = innerW - line1.length - 2;
+  const pad2 = innerW - line2.length - vLabel.length - 4;
   return `
-   \x1b[2m\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\x1b[0m
-   \x1b[2m\u2502\x1b[0m  \x1b[1mF i e l d   T h e o r y\x1b[0m    \x1b[2m\u2502\x1b[0m
-   \x1b[2m\u2502\x1b[0m${line2Content}${' '.repeat(Math.max(vPad, 1))}\x1b[2m${vLabel}\x1b[0m \x1b[2m\u2502\x1b[0m
-   \x1b[2m\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\x1b[0m`;
+     \x1b[2m\u250c${'\u2500'.repeat(innerW)}\u2510\x1b[0m
+     \x1b[2m\u2502\x1b[0m  \x1b[1m${line1}\x1b[0m${' '.repeat(pad1)} \x1b[2m\u2502\x1b[0m
+     \x1b[2m\u2502\x1b[0m  \x1b[2m${line2}\x1b[0m${' '.repeat(Math.max(pad2, 1))}\x1b[2m${vLabel}\x1b[0m  \x1b[2m\u2502\x1b[0m
+     \x1b[2m\u2514${'\u2500'.repeat(innerW)}\u2518\x1b[0m`;
 }
 
 export function showWelcome(): void {
@@ -297,9 +301,12 @@ export function buildCli() {
   }
 
   async function classifyNew(): Promise<void> {
+    const engine = await resolveEngine();
+
     const start = Date.now();
     process.stderr.write('  Classifying new bookmarks (categories)...\n');
     const catResult = await classifyWithLlm({
+      engine,
       onBatch: (done: number, total: number) => {
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
         const elapsed = Math.round((Date.now() - start) / 1000);
@@ -313,6 +320,7 @@ export function buildCli() {
     const domStart = Date.now();
     process.stderr.write('  Classifying new bookmarks (domains)...\n');
     const domResult = await classifyDomainsWithLlm({
+      engine,
       all: false,
       onBatch: (done: number, total: number) => {
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -595,9 +603,12 @@ export function buildCli() {
         console.log(`Indexed ${result.recordCount} bookmarks \u2192 ${result.dbPath}`);
         console.log(formatClassificationSummary(result.summary));
       } else {
+        const engine = await resolveEngine();
+
         let catStart = Date.now();
         process.stderr.write('Classifying categories with LLM (batches of 50, ~2 min per batch)...\n');
         const catResult = await classifyWithLlm({
+          engine,
           onBatch: (done: number, total: number) => {
             const pct = total > 0 ? Math.round((done / total) * 100) : 0;
             const elapsed = Math.round((Date.now() - catStart) / 1000);
@@ -610,6 +621,7 @@ export function buildCli() {
         let domStart = Date.now();
         process.stderr.write('\nClassifying domains with LLM (batches of 50, ~2 min per batch)...\n');
         const domResult = await classifyDomainsWithLlm({
+          engine,
           all: false,
           onBatch: (done: number, total: number) => {
             const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -629,9 +641,11 @@ export function buildCli() {
     .option('--all', 'Re-classify all bookmarks, not just missing')
     .action(safe(async (options) => {
       if (!requireData()) return;
+      const engine = await resolveEngine();
       const start = Date.now();
       process.stderr.write('Classifying bookmark domains with LLM (batches of 50, ~2 min per batch)...\n');
       const result = await classifyDomainsWithLlm({
+        engine,
         all: options.all ?? false,
         onBatch: (done: number, total: number) => {
           const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -640,6 +654,65 @@ export function buildCli() {
         },
       });
       console.log(`\nDomains: ${result.classified}/${result.totalUnclassified} classified`);
+    }));
+
+  // ── model ───────────────────────────────────────────────────────────────
+
+  program
+    .command('model')
+    .description('View or change the default LLM engine for classification')
+    .argument('[engine]', 'Set default engine directly (e.g. claude, codex)')
+    .action(safe(async (engineArg?: string) => {
+      const available = detectAvailableEngines();
+      const prefs = loadPreferences();
+
+      if (available.length === 0) {
+        console.log('  No LLM engines found on PATH.');
+        console.log('  Install one of:');
+        console.log('    - Claude Code: https://docs.anthropic.com/en/docs/claude-code');
+        console.log('    - Codex CLI:   https://github.com/openai/codex');
+        return;
+      }
+
+      // Direct set: ft model claude
+      if (engineArg) {
+        if (!available.includes(engineArg)) {
+          console.log(`  "${engineArg}" is not available. Found: ${available.join(', ')}`);
+          process.exitCode = 1;
+          return;
+        }
+        savePreferences({ ...prefs, defaultEngine: engineArg });
+        console.log(`  \u2713 Default model set to ${engineArg}`);
+        return;
+      }
+
+      // Interactive picker
+      console.log('  Available engines:\n');
+      for (const name of available) {
+        const marker = name === prefs.defaultEngine ? ' (default)' : '';
+        console.log(`    ${name}${marker}`);
+      }
+      console.log();
+
+      if (!process.stdin.isTTY) {
+        if (prefs.defaultEngine) console.log(`  Current default: ${prefs.defaultEngine}`);
+        console.log('  Set with: ft model <engine>');
+        return;
+      }
+
+      const readline = await import('node:readline');
+      const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+      const answer = await new Promise<string>((resolve) => {
+        rl.question('  Select default: ', (a) => { rl.close(); resolve(a.trim().toLowerCase()); });
+      });
+
+      if (available.includes(answer)) {
+        savePreferences({ ...prefs, defaultEngine: answer });
+        console.log(`  \u2713 Default model set to ${answer}`);
+      } else if (answer) {
+        console.log(`  "${answer}" is not available. Found: ${available.join(', ')}`);
+        process.exitCode = 1;
+      }
     }));
 
   // ── categories ──────────────────────────────────────────────────────────
@@ -765,7 +838,7 @@ export function buildCli() {
 
   const bookmarksAlias = program.command('bookmarks').description('(alias) Bookmark commands').helpOption(false);
   for (const cmd of ['sync', 'search', 'list', 'show', 'stats', 'viz', 'classify', 'classify-domains',
-    'categories', 'domains', 'index', 'auth', 'status', 'path', 'sample', 'fetch-media']) {
+    'categories', 'domains', 'model', 'index', 'auth', 'status', 'path', 'sample', 'fetch-media']) {
     bookmarksAlias.command(cmd).description(`Alias for: ft ${cmd}`).allowUnknownOption(true)
       .action(async () => {
         const args = ['node', 'ft', cmd, ...process.argv.slice(4)];

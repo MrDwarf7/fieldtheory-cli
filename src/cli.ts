@@ -1015,12 +1015,14 @@ export function buildCli() {
     .command('md')
     .description('Export bookmarks as individual markdown files')
     .option('--force', 'Re-export all bookmarks (overwrite existing files)')
+    .option('--format <type>', 'Filename format: rev-iso (default), legacy', (v: string) => v as 'legacy' | 'rev-iso', 'rev-iso')
     .action(safe(async (options) => {
       if (!requireIndex()) return;
       let lastLine = '';
       const spinner = createSpinner(() => lastLine);
       const result = await exportBookmarks({
         force: options.force,
+        filenameFormat: options.format,
         onProgress: (s) => {
           lastLine = s;
           spinner.update();

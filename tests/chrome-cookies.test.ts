@@ -79,14 +79,21 @@ test('buildWindowsDpapiScript: probes assemblies before calling ProtectedData', 
   assert.match(script, /ToBase64String/);
 });
 
-test('windowsPowerShellCandidates: prefers System32 powershell first', () => {
-  const candidates = windowsPowerShellCandidates({ SystemRoot: 'C:\\Windows' });
+test('windowsPowerShellCandidates: only returns trusted absolute paths', () => {
+  const candidates = windowsPowerShellCandidates({
+    SystemRoot: 'C:\\Windows',
+  } as NodeJS.ProcessEnv, () => true);
   assert.equal(candidates[0], 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-  assert.ok(candidates.includes('powershell.exe'));
-  assert.ok(candidates.includes('pwsh.exe'));
+  assert.equal(candidates[1], 'C:\\Windows\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe');
+  assert.equal(candidates.length, 2);
 });
 
-test('runWindowsDpapi: falls back when the absolute powershell path is missing', () => {
+test('windowsPowerShellCandidates: returns empty when SystemRoot is missing or relative', () => {
+  assert.deepEqual(windowsPowerShellCandidates({} as NodeJS.ProcessEnv), []);
+  assert.deepEqual(windowsPowerShellCandidates({ SystemRoot: 'Windows' } as NodeJS.ProcessEnv), []);
+});
+
+test('runWindowsDpapi: falls back to Sysnative when the System32 path is unavailable', () => {
   const calls: string[] = [];
   const fakeSpawn = ((command: string) => {
     calls.push(command);
@@ -100,13 +107,14 @@ test('runWindowsDpapi: falls back when the absolute powershell path is missing',
   const out = runWindowsDpapi(Buffer.from('secret'), 'base64', {
     env: { SystemRoot: 'C:\\Windows' },
     failureLabel: 'Could not decrypt encryption key via DPAPI.',
+    pathExists: () => true,
     spawn: fakeSpawn,
     timeoutMs: 1000,
   });
 
   assert.equal(out, 'ZGVjcnlwdGVk');
   assert.equal(calls[0], 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-  assert.equal(calls[1], 'powershell.exe');
+  assert.equal(calls[1], 'C:\\Windows\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe');
 });
 
 test('runWindowsDpapi: surfaces runtime mismatch clearly', () => {
@@ -119,6 +127,7 @@ test('runWindowsDpapi: surfaces runtime mismatch clearly', () => {
     () => runWindowsDpapi(Buffer.from('secret'), 'base64', {
       env: { SystemRoot: 'C:\\Windows' },
       failureLabel: 'Could not decrypt encryption key via DPAPI.',
+      pathExists: () => true,
       spawn: fakeSpawn,
       timeoutMs: 1000,
     }),
@@ -139,6 +148,6 @@ test('runWindowsDpapi: reports when no PowerShell runtime is available', () => {
       spawn: fakeSpawn,
       timeoutMs: 1000,
     }),
-    /Could not decrypt encryption key via DPAPI\.[\s\S]*Could not launch Windows PowerShell for DPAPI decryption/,
+    /Could not decrypt encryption key via DPAPI\.[\s\S]*Could not find a trusted Windows PowerShell binary for DPAPI decryption/,
   );
 });

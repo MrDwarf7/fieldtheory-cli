@@ -83,15 +83,21 @@ type WindowsDpapiOutputMode = 'base64' | 'utf8';
 const WINDOWS_DPAPI_RUNTIME_HINT =
   'DPAPI types are unavailable in this PowerShell runtime. Prefer Windows PowerShell (powershell.exe).';
 
-export function windowsPowerShellCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
-  const candidates: string[] = [];
+export function windowsPowerShellCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  pathExists: (path: string) => boolean = existsSync,
+): string[] {
   const systemRoot = env.SystemRoot || env.WINDIR;
-  if (systemRoot) {
-    candidates.push(winPath.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+  if (!systemRoot || !winPath.isAbsolute(systemRoot)) {
+    return [];
   }
 
-  candidates.push('powershell.exe', 'powershell', 'pwsh.exe', 'pwsh');
-  return [...new Set(candidates)];
+  const candidates = [
+    winPath.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    winPath.join(systemRoot, 'Sysnative', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+  ];
+
+  return [...new Set(candidates.filter(candidate => pathExists(candidate)))];
 }
 
 export function buildWindowsDpapiScript(outputMode: WindowsDpapiOutputMode): string {
@@ -129,6 +135,7 @@ export function buildWindowsDpapiScript(outputMode: WindowsDpapiOutputMode): str
 interface WindowsDpapiOptions {
   env?: NodeJS.ProcessEnv;
   failureLabel: string;
+  pathExists?: (path: string) => boolean;
   spawn?: typeof spawnSync;
   timeoutMs: number;
 }
@@ -140,7 +147,7 @@ export function runWindowsDpapi(
 ): string {
   const spawn = options.spawn ?? spawnSync;
   const script = buildWindowsDpapiScript(outputMode);
-  const commands = windowsPowerShellCandidates(options.env);
+  const commands = windowsPowerShellCandidates(options.env, options.pathExists);
   let sawRuntime = false;
   let lastProblem = '';
 
@@ -180,8 +187,8 @@ export function runWindowsDpapi(
   if (!sawRuntime) {
     throw new Error(
       `${options.failureLabel}\n` +
-      'Could not launch Windows PowerShell for DPAPI decryption.\n' +
-      'Make sure Windows PowerShell (powershell.exe) is available.\n' +
+      'Could not find a trusted Windows PowerShell binary for DPAPI decryption.\n' +
+      'Expected Windows PowerShell under %SystemRoot%\\System32 or %SystemRoot%\\Sysnative.\n' +
       'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
     );
   }

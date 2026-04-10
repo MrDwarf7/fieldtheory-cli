@@ -23,6 +23,8 @@ import { slug } from "./md.js";
 
 export type FilenameFormat = "legacy" | "rev-iso";
 
+export type FormatMigrationStatus = "none" | "mismatch" | "empty";
+
 export interface ExportOptions {
   force?: boolean;
   onProgress?: (status: string) => void;
@@ -42,6 +44,36 @@ const DATE_STR_REGEX = RegExp(
 
 function bookmarksDir(): string {
   return path.join(mdDir(), "bookmarks");
+}
+
+/**
+ * Detect whether existing exported files use a different format than
+ * the one requested.  Returns:
+ *   "empty"   — no .md files on disk (fresh export, no conflict)
+ *   "none"    — files exist and likely match the requested format
+ *   "mismatch"— files exist but wouldn't match (format change detected)
+ */
+export async function detectFormatMigration(
+  format: FilenameFormat,
+): Promise<FormatMigrationStatus> {
+  let files: string[];
+  try {
+    files = fs.readdirSync(bookmarksDir()).filter((f) => f.endsWith(".md"));
+  } catch {
+    return "empty";
+  }
+  if (files.length === 0) return "empty";
+  if (format === "legacy") return "none"; // legacy was the old default; safe
+
+  // format is "rev-iso" — sample the first bookmark and check if its
+  // new-style filename already exists on disk.
+  const sample = await listBookmarks({ limit: 1, sort: "desc" });
+  if (sample.length === 0) return "none";
+
+  const newName = bookmarkFilename(sample[0], "rev-iso");
+  const exists = files.includes(newName);
+
+  return exists ? "none" : "mismatch";
 }
 
 function parsePostedAt(dateStr: string | null | undefined): {

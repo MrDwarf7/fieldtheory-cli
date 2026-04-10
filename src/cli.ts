@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { syncTwitterBookmarks } from './bookmarks.js';
 import { getBookmarkStatusView, formatBookmarkStatus } from './bookmarks-service.js';
 import { runTwitterOAuthFlow } from './xauth.js';
@@ -25,7 +25,7 @@ import { loadPreferences, savePreferences } from './preferences.js';
 import { compileMd } from './md.js';
 import { askMd } from './md-ask.js';
 import { lintMd, fixLintIssues } from './md-lint.js';
-import { exportBookmarks } from './md-export.js';
+import { exportBookmarks, detectFormatMigration, type FilenameFormat } from './md-export.js';
 import { renderViz } from './bookmarks-viz.js';
 import { listBrowserIds } from './browsers.js';
 import { dataDir, ensureDataDir, isFirstRun, twitterBookmarksIndexPath, twitterBackfillStatePath, mdDir } from './paths.js';
@@ -1020,14 +1020,64 @@ export function buildCli() {
     .command('md')
     .description('Export bookmarks as individual markdown files')
     .option('--force', 'Re-export all bookmarks (overwrite existing files)')
-    .option('--format <type>', 'Filename format: rev-iso (default), legacy', (v: string) => v as 'legacy' | 'rev-iso', 'rev-iso')
+    .addOption(new Option('--format <type>', 'Filename format').choices(['rev-iso', 'legacy']).default('rev-iso'))
     .action(safe(async (options) => {
       if (!requireIndex()) return;
+
+      // ── Format migration guard ──────────────────────────────────────
+      const format = options.format as FilenameFormat;
+      const needsMigration = await detectFormatMigration(format);
+
+      if (needsMigration === 'mismatch') {
+        console.log(
+          '\n  ⚠  Existing markdown files use the legacy filename format,\n' +
+          '     but you requested the new rev-iso format.\n' +
+          '     Without action, every bookmark will be re-exported as duplicates.\n',
+        );
+        console.log('  Options:');
+        console.log('    [b] Back up old folder + force regenerate (recommended)');
+        console.log('    [f] Force regenerate in-place (overwrite existing)');
+        console.log('    [c] Continue as-is (will create duplicates)');
+        console.log('    [x] Cancel\n');
+
+        const answer = await promptText('  Choice [b/f/c/x]: ', { output: process.stdout });
+        if (answer.kind !== 'answer' || answer.value === 'x') {
+          console.log('  Cancelled.');
+          return;
+        }
+
+        const choice = answer.value.trim().toLowerCase();
+
+        if (choice === 'b' || choice === 'f') {
+          if (choice === 'b') {
+            const src = path.join(mdDir(), 'bookmarks');
+            const dst = path.join(mdDir(), `bookmarks-backup-${Date.now()}`);
+            fs.renameSync(src, dst);
+            console.log(`  Backed up to: ${dst}`);
+          }
+          // Force regen — pass force: true to overwrite / start fresh
+          let lastLine = '';
+          const spinner = createSpinner(() => lastLine);
+          const result = await exportBookmarks({
+            force: true,
+            filenameFormat: format,
+            onProgress: (s) => { lastLine = s; spinner.update(); },
+          });
+          spinner.stop();
+          console.log(`Exported ${result.exported}/${result.total} bookmarks`);
+          console.log(`  ${result.elapsed}s elapsed`);
+          console.log(`\n  Open in your markdown viewer:\n  ${mdDir()}`);
+          return;
+        }
+
+        // choice === 'c' — fall through to normal export
+      }
+
       let lastLine = '';
       const spinner = createSpinner(() => lastLine);
       const result = await exportBookmarks({
         force: options.force,
-        filenameFormat: options.format,
+        filenameFormat: format,
         onProgress: (s) => {
           lastLine = s;
           spinner.update();

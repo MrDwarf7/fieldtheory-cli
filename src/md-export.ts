@@ -52,16 +52,18 @@ function parsePostedAt(dateStr: string | null | undefined): {
 } | null {
   if (!dateStr) return null;
 
-  if (dateStr.length === 10 && dateStr.includes("-")) {
-    const year = parseInt(dateStr.slice(0, 4));
-    const month = parseInt(dateStr.slice(5, 7)) - 1;
-    const day = parseInt(dateStr.slice(8, 10));
+  // ISO date — bare ("2024-01-15") or with time ("2024-01-15T00:00:00Z")
+  if (dateStr.length >= 10 && dateStr[4] === '-' && dateStr[7] === '-') {
+    const iso = dateStr.slice(0, 10); // "YYYY-MM-DD"
+    const year = parseInt(iso.slice(0, 4));
+    const month = parseInt(iso.slice(5, 7)) - 1;
+    const day = parseInt(iso.slice(8, 10));
     const dowNum = new Date(year, month, day).getDay();
     const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dowNum];
     return {
-      year: dateStr.slice(0, 4),
-      month: dateStr.slice(5, 7),
-      day: dateStr.slice(8, 10),
+      year: iso.slice(0, 4),
+      month: iso.slice(5, 7),
+      day: iso.slice(8, 10),
       dow,
     };
   }

@@ -5,7 +5,7 @@
  * Remembers the user's choice in ~/.ft-bookmarks/.preferences.
  */
 
-import { execFileSync, execFile, execSync, type ExecSyncOptions } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadPreferences, savePreferences } from './preferences.js';
@@ -157,20 +157,31 @@ export interface InvokeError extends Error {
 
 export function invokeEngine(engine: ResolvedEngine, prompt: string, opts: InvokeOptions = {}): string {
   const { bin, args } = engine.config;
-  const fullArgs = args(prompt);
 
-  const result = execSync(`${bin} ${fullArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`, {
+  const result = spawnSync(bin, args(prompt), {
     encoding: 'utf-8',
     timeout: opts.timeout ?? 120_000,
     maxBuffer: opts.maxBuffer ?? 1024 * 1024,
-  } as ExecSyncOptions) as unknown as { stdout: string; stderr: string };
+  });
 
-  const stdout = result.stdout.trim();
+  if (result.error) {
+    throw result.error;
+  }
+
+  const stdout = (result.stdout ?? '').trim();
   const stderr = result.stderr ?? '';
+
+  if (result.status !== 0) {
+    const errorMsg = stderr.trim() || stdout || `${bin} exited with code ${result.status}`;
+    const error = new Error(errorMsg) as InvokeError;
+    error.stderr = stderr;
+    error.stdout = stdout;
+    throw error;
+  }
 
   const fullOutput = stdout + '\n' + stderr;
   if (fullOutput.includes('ERROR:') || fullOutput.includes('error:')) {
-    const errorMsg = stderr.includes('ERROR:') || stderr.includes('error:') ? stderr.trim() : stdout.trim();
+    const errorMsg = stderr.includes('ERROR:') || stderr.includes('error:') ? stderr.trim() : stdout;
     const error = new Error(errorMsg) as InvokeError;
     error.stderr = stderr;
     error.stdout = stdout;

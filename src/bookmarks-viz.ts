@@ -4,6 +4,8 @@ import { twitterBookmarksIndexPath } from './paths.js';
 // ── ANSI helpers ─────────────────────────────────────────────────────────────
 
 export const ESC = '\x1b[';
+/** Regex that matches a single ANSI escape sequence (CSI … m). */
+const ANSI_RE = /\x1b\[[^m]*m/g;
 export const RESET = `${ESC}0m`;
 const BOLD = `${ESC}1m`;
 const DIM = `${ESC}2m`;
@@ -93,7 +95,7 @@ function boxBottom(width: number): string {
   return C.dim + '╰' + '─'.repeat(width - 2) + '╯' + RESET;
 }
 function boxRow(content: string, width: number): string {
-  const stripped = content.replace(new RegExp(ESC + '\\[([^m]*m)', 'g'), '');
+  const stripped = content.replace(ANSI_RE, '');
   const pad = Math.max(0, width - 4 - stripped.length);
   return C.dim + '│ ' + RESET + content + ' '.repeat(pad) + C.dim + ' │' + RESET;
 }
